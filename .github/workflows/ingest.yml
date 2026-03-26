@@ -1,0 +1,53 @@
+name: Hourly News Ingestion
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # every hour
+  workflow_dispatch: # manual trigger button
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ingestion.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements/ingestion.txt
+
+      - name: Ingest reference sources (parallel)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EMBEDDING_MODEL: text-embedding-3-small
+          LLM_MODEL: gpt-4o-mini
+          FETCH_DELAY_SECONDS: "1.5"
+        run: |
+          python -c "
+          from ingestion.news_scraper import run_source_ingestion
+          for source in ['factcheck', 'azattyq', 'informburo', 'tengrinews']:
+              try:
+                  run_source_ingestion(source, months_back=1)
+              except Exception as e:
+                  print(f'WARN: {source} failed: {e}')
+          "
+
+      - name: Ingest ZTB + verify claims
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EMBEDDING_MODEL: text-embedding-3-small
+          LLM_MODEL: gpt-4o-mini
+          FETCH_DELAY_SECONDS: "1.5"
+        run: |
+          python -c "
+          from ingestion.news_scraper import run_source_ingestion
+          run_source_ingestion('ztb', months_back=1)
+          "
