@@ -15,18 +15,25 @@ load_dotenv()
 _pool = None
 
 
+def _db_kwargs() -> dict:
+    """Return connection kwargs: DATABASE_URL if set, else individual POSTGRES_* vars."""
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return {"dsn": database_url}
+    return {
+        "host": os.getenv("POSTGRES_HOST", "localhost"),
+        "port": int(os.getenv("POSTGRES_PORT", 5432)),
+        "dbname": os.getenv("POSTGRES_DB", "factcheck"),
+        "user": os.getenv("POSTGRES_USER", "factcheck"),
+        "password": os.getenv("POSTGRES_PASSWORD", "changeme_secure_password"),
+    }
+
+
 def get_pool() -> ThreadedConnectionPool:
     global _pool
     if _pool is None:
-        _pool = ThreadedConnectionPool(
-            minconn=2,
-            maxconn=10,
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", 5432)),
-            dbname=os.getenv("POSTGRES_DB", "factcheck"),
-            user=os.getenv("POSTGRES_USER", "factcheck"),
-            password=os.getenv("POSTGRES_PASSWORD", "changeme_secure_password"),
-        )
+        kwargs = _db_kwargs()
+        _pool = ThreadedConnectionPool(minconn=2, maxconn=10, **kwargs)
     return _pool
 
 
@@ -42,13 +49,7 @@ def get_conn():
 
 def get_db_connection():
     """Direct un-pooled connection for ad-hoc queries."""
-    return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", 5432)),
-        dbname=os.getenv("POSTGRES_DB", "factcheck"),
-        user=os.getenv("POSTGRES_USER", "factcheck"),
-        password=os.getenv("POSTGRES_PASSWORD", "changeme_secure_password"),
-    )
+    return psycopg2.connect(**_db_kwargs())
 
 
 def vector_search(

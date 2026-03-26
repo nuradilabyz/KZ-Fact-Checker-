@@ -1,0 +1,28 @@
+services:
+  # --- FastAPI backend ---
+  - type: web
+    name: kz-factchecker-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements/api.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: LLM_MODEL
+        value: gpt-4o-mini
+
+  # --- Streamlit UI ---
+  - type: web
+    name: kz-factchecker-ui
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements/ui.txt
+    startCommand: streamlit run ui/app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: API_URL
+        sync: false  # set to https://kz-factchecker-api.onrender.com after API deploys
