@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps for psycopg2 + playwright browsers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev wget \
+    # Playwright chromium deps (manually, to avoid missing font packages on ARM64)
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+    libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 \
+    libcairo2 libasound2 libxshmfence1 libxfixes3 fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements/ingestion.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install playwright chromium (without --with-deps to avoid font package errors)
+RUN playwright install chromium || true
+
+COPY ingestion/ ingestion/
+COPY db/ db/
+
+ENTRYPOINT ["python", "-m"]
+CMD ["ingestion.factcheck_scraper"]
