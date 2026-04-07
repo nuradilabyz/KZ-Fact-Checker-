@@ -310,8 +310,10 @@ def extract_claims(req: ExtractRequest):
 
 
 @app.get("/ztb_results")
-def get_ztb_results(limit: int = 30):
-    """Return latest ZTB articles that have SUPPORTED/REFUTED verification results."""
+def get_ztb_results(limit: int = 30, date: str | None = None):
+    """Return latest ZTB articles that have SUPPORTED/REFUTED verification results.
+    Optional date filter (YYYY-MM-DD) to show articles from a specific date.
+    """
     def _to_payload(raw_response: dict | str | None) -> dict:
         if isinstance(raw_response, dict):
             return raw_response
@@ -384,6 +386,15 @@ def get_ztb_results(limit: int = 30):
 
         return evidence_sources[:10]
 
+    # Parse optional date filter
+    date_filter = None
+    if date:
+        try:
+            from datetime import datetime as _dt
+            date_filter = _dt.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -400,41 +411,80 @@ def get_ztb_results(limit: int = 30):
         )
         total_verified_articles = cur.fetchone()[0]
 
-        cur.execute(
-            """
-            WITH latest_verified_articles AS (
-                SELECT sa.url, sa.title, sa.published_at, sa.created_at
-                FROM source_articles sa
-                WHERE sa.source = 'ztb'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM ztb_claims zc
-                      JOIN verifications v ON v.claim_id = zc.claim_id
-                      WHERE zc.article_url = sa.url
-                        AND v.verdict IN ('SUPPORTED', 'REFUTED')
-                  )
-                ORDER BY COALESCE(sa.published_at, sa.created_at) DESC NULLS LAST
-                LIMIT %s
+        if date_filter:
+            cur.execute(
+                """
+                WITH filtered_articles AS (
+                    SELECT sa.url, sa.title, sa.published_at, sa.created_at
+                    FROM source_articles sa
+                    WHERE sa.source = 'ztb'
+                      AND COALESCE(sa.published_at, sa.created_at)::date = %s
+                      AND EXISTS (
+                          SELECT 1
+                          FROM ztb_claims zc
+                          JOIN verifications v ON v.claim_id = zc.claim_id
+                          WHERE zc.article_url = sa.url
+                      )
+                    ORDER BY COALESCE(sa.published_at, sa.created_at) DESC NULLS LAST
+                    LIMIT %s
+                )
+                SELECT
+                    fa.url,
+                    fa.title,
+                    fa.published_at,
+                    fa.created_at,
+                    zc.claim_text,
+                    v.verdict,
+                    v.similarity_score,
+                    v.explanation_kk,
+                    v.best_article_url,
+                    v.best_source,
+                    v.raw_response,
+                    ref_sa.title AS best_source_title
+                FROM filtered_articles fa
+                JOIN ztb_claims zc ON zc.article_url = fa.url
+                JOIN verifications v ON v.claim_id = zc.claim_id
+                LEFT JOIN source_articles ref_sa ON ref_sa.url = v.best_article_url
+                ORDER BY COALESCE(fa.published_at, fa.created_at) DESC NULLS LAST, zc.claim_id
+                """,
+                (date_filter, limit),
             )
-            SELECT
-                lva.url,
-                lva.title,
-                lva.published_at,
-                lva.created_at,
-                zc.claim_text,
-                v.verdict,
-                v.similarity_score,
-                v.explanation_kk,
-                v.best_article_url,
-                v.best_source,
-                v.raw_response,
-                ref_sa.title AS best_source_title
-            FROM latest_verified_articles lva
-            JOIN ztb_claims zc ON zc.article_url = lva.url
-            JOIN verifications v ON v.claim_id = zc.claim_id
-            LEFT JOIN source_articles ref_sa ON ref_sa.url = v.best_article_url
-            WHERE v.verdict IN ('SUPPORTED', 'REFUTED')
-            ORDER BY COALESCE(lva.published_at, lva.created_at) DESC NULLS LAST, zc.claim_id
+        else:
+            cur.execute(
+                """
+                WITH latest_verified_articles AS (
+                    SELECT sa.url, sa.title, sa.published_at, sa.created_at
+                    FROM source_articles sa
+                    WHERE sa.source = 'ztb'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM ztb_claims zc
+                          JOIN verifications v ON v.claim_id = zc.claim_id
+                          WHERE zc.article_url = sa.url
+                            AND v.verdict IN ('SUPPORTED', 'REFUTED')
+                      )
+                    ORDER BY COALESCE(sa.published_at, sa.created_at) DESC NULLS LAST
+                    LIMIT %s
+                )
+                SELECT
+                    lva.url,
+                    lva.title,
+                    lva.published_at,
+                    lva.created_at,
+                    zc.claim_text,
+                    v.verdict,
+                    v.similarity_score,
+                    v.explanation_kk,
+                    v.best_article_url,
+                    v.best_source,
+                    v.raw_response,
+                    ref_sa.title AS best_source_title
+                FROM latest_verified_articles lva
+                JOIN ztb_claims zc ON zc.article_url = lva.url
+                JOIN verifications v ON v.claim_id = zc.claim_id
+                LEFT JOIN source_articles ref_sa ON ref_sa.url = v.best_article_url
+                WHERE v.verdict IN ('SUPPORTED', 'REFUTED')
+                ORDER BY COALESCE(lva.published_at, lva.created_at) DESC NULLS LAST, zc.claim_id
             """,
             (limit,),
         )

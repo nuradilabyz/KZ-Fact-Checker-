@@ -7,6 +7,7 @@ Two tabs:
 """
 import os
 import json
+from datetime import date, timedelta
 from html import escape
 
 import requests
@@ -182,10 +183,11 @@ st.markdown(
 )
 
 # ── Tabs ─────────────────────────────────────────────────────
-tab_ztb, tab_check, tab_stats = st.tabs([
+tab_ztb, tab_check, tab_stats, tab_arch = st.tabs([
     "📰 ZTB тексеру нәтижелері",
     "🔍 Мәлімдемені тексеру",
     "📊 Білім қоры",
+    "🏗 Архитектура",
 ])
 
 
@@ -413,19 +415,32 @@ def _article_border_style(verdicts: list[str]) -> tuple[str, str, str]:
 with tab_ztb:
     st.markdown("### 📰 ZTB.kz мақалаларының тексеру нәтижелері")
 
-    if st.button("🔄 Жаңарту", key="refresh_ztb", use_container_width=False):
-        st.rerun()
+    col_date, col_btn = st.columns([3, 1])
+    with col_date:
+        selected_date = st.date_input(
+            "Күнді таңдаңыз:",
+            value=date.today(),
+            min_value=date(2025, 1, 1),
+            max_value=date.today(),
+            key="ztb_date",
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Жаңарту", key="refresh_ztb", use_container_width=True):
+            st.rerun()
 
     try:
         with st.spinner("Деректер жүктелуде..."):
-            resp = requests.get(f"{API_URL}/ztb_results?limit=50", timeout=30)
+            date_str = selected_date.strftime("%Y-%m-%d") if selected_date else ""
+            api_params = f"limit=50&date={date_str}" if date_str else "limit=50"
+            resp = requests.get(f"{API_URL}/ztb_results?{api_params}", timeout=30)
             if resp.status_code == 200:
                 payload = resp.json()
                 ztb_articles = payload.get("ztb_results", [])
                 total_verified_articles = payload.get("total_verified_articles", len(ztb_articles))
 
                 if not ztb_articles:
-                    st.info("Әзірге тексерілген ZTB мақалалары жоқ. DAG 'news_ingest' іске қосылғанша күтіңіз.")
+                    st.info(f"📅 {selected_date.strftime('%Y-%m-%d')} күніне тексерілген ZTB мақалалары табылмады.")
                 else:
                     st.markdown(
                         f'<div class="stat-card" style="margin-bottom:1rem;">'
@@ -827,6 +842,194 @@ with tab_stats:
                 st.error(f"API қатесі: {resp.status_code}")
     except Exception as e:
         st.error(f"Статистиканы алу мүмкін болмады: {e}")
+
+
+# ── TAB 4: Architecture ────────────────────────────────────────
+with tab_arch:
+    st.markdown("### 🏗 System Architecture")
+    st.markdown("*Data Engineering portfolio project — automated fact-checking pipeline for Kazakh news*")
+
+    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+
+    # Pipeline overview
+    st.markdown("""
+<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
+<h4 style="margin-top:0;">Data Pipeline Overview</h4>
+<pre style="color:#e2e8f0;font-size:0.85rem;line-height:1.8;overflow-x:auto;">
+┌─────────────────────────────────────────────────────────────────┐
+│                    SCHEDULER (Hourly Cron)                       │
+│              Apache Airflow / GitHub Actions                     │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+          ┌─────────┬───────┴───────┬──────────┐
+          ▼         ▼               ▼          ▼
+   ┌────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐
+   │Factcheck│ │ Azattyq  │ │ Informburo │ │ Tengri   │
+   │   .kz  │ │  .org    │ │    .kz     │ │ news.kz  │
+   └───┬────┘ └────┬─────┘ └─────┬──────┘ └────┬─────┘
+       │           │             │              │
+       └─────┬─────┴──────┬──────┘              │
+             ▼            ▼                     ▼
+     ┌──────────────────────────────────────────────┐
+     │          WEB SCRAPING LAYER                   │
+     │    Python · BeautifulSoup · lxml · RSS        │
+     │    Rate limiting · Content hashing (MD5)      │
+     └──────────────────┬───────────────────────────┘
+                        │
+                        ▼
+     ┌──────────────────────────────────────────────┐
+     │          TEXT PROCESSING                       │
+     │    Chunking (500 tokens, 50 overlap)          │
+     │    sentence-transformers (384-dim vectors)     │
+     └──────────────────┬───────────────────────────┘
+                        │
+                        ▼
+     ┌──────────────────────────────────────────────┐
+     │          POSTGRESQL + pgvector                │
+     │    HNSW index · Cosine similarity search      │
+     │    4 tables · Incremental upserts             │
+     └──────────────────┬───────────────────────────┘
+                        │
+          ┌─────────────┴──────────────┐
+          ▼                            ▼
+   ┌─────────────┐            ┌──────────────┐
+   │  FastAPI     │            │  ZTB.kz      │
+   │  REST API    │◄───────── │  Claims +     │
+   │  RAG Search  │           │  Verification │
+   └──────┬──────┘            └──────────────┘
+          │
+          ▼
+   ┌─────────────┐
+   │  Streamlit   │
+   │  Dashboard   │
+   └─────────────┘
+</pre>
+</div>
+""", unsafe_allow_html=True)
+
+    # Tech stack
+    st.markdown("#### Tech Stack")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("""
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+<h5 style="color:#818cf8;margin-top:0;">Orchestration</h5>
+<ul style="color:#e2e8f0;line-height:2;">
+<li><strong>Apache Airflow</strong> — DAG-based pipeline scheduling</li>
+<li><strong>GitHub Actions</strong> — CI/CD & hourly cron jobs</li>
+<li>Hourly ingestion across 5 news sources</li>
+</ul>
+</div>
+
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+<h5 style="color:#818cf8;margin-top:0;">Data Ingestion</h5>
+<ul style="color:#e2e8f0;line-height:2;">
+<li><strong>Python</strong> — scraping, parsing, NLP pipeline</li>
+<li><strong>BeautifulSoup + lxml</strong> — HTML parsing</li>
+<li><strong>RSS feeds</strong> — article discovery</li>
+<li>Incremental processing via content hashing (MD5)</li>
+<li>Rate limiting & deduplication at every stage</li>
+</ul>
+</div>
+
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+<h5 style="color:#818cf8;margin-top:0;">NLP & Embeddings</h5>
+<ul style="color:#e2e8f0;line-height:2;">
+<li><strong>sentence-transformers</strong> — multilingual embeddings (384-dim)</li>
+<li><strong>LLM API</strong> — claim extraction & verdict generation</li>
+<li>RAG (Retrieval-Augmented Generation) pipeline</li>
+</ul>
+</div>
+""", unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+<h5 style="color:#818cf8;margin-top:0;">Storage</h5>
+<ul style="color:#e2e8f0;line-height:2;">
+<li><strong>PostgreSQL 17</strong> — relational data store</li>
+<li><strong>pgvector</strong> — vector similarity search (HNSW index)</li>
+<li><strong>Neon</strong> — serverless PostgreSQL (cloud)</li>
+<li>4 normalized tables with foreign keys & indexes</li>
+</ul>
+</div>
+
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+<h5 style="color:#818cf8;margin-top:0;">Backend & Frontend</h5>
+<ul style="color:#e2e8f0;line-height:2;">
+<li><strong>FastAPI</strong> — REST API with 5 endpoints</li>
+<li><strong>Streamlit</strong> — interactive dashboard</li>
+<li><strong>Docker + docker-compose</strong> — local development</li>
+</ul>
+</div>
+
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+<h5 style="color:#818cf8;margin-top:0;">Infrastructure</h5>
+<ul style="color:#e2e8f0;line-height:2;">
+<li><strong>Render</strong> — cloud hosting (API + UI)</li>
+<li><strong>Neon</strong> — managed PostgreSQL + pgvector</li>
+<li><strong>GitHub Actions</strong> — automated hourly pipeline</li>
+<li>Fully automated, zero-maintenance deployment</li>
+</ul>
+</div>
+""", unsafe_allow_html=True)
+
+    # Data model
+    st.markdown("#### Data Model")
+    st.markdown("""
+<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;">
+<pre style="color:#e2e8f0;font-size:0.82rem;line-height:1.8;">
+source_articles (PK: url)           knowledge_chunks (PK: chunk_id)
+├── source: text                    ├── article_url → source_articles
+├── title: text                     ├── source: text
+├── clean_text: text                ├── chunk_text: text
+├── content_hash: text (MD5)        ├── embedding: vector(384)  ← HNSW index
+├── verdict_label: text             └── chunk_hash: text (SHA-256)
+└── published_at: timestamptz
+                                    ztb_claims (PK: claim_id)
+verifications (PK: id)              ├── article_url → source_articles
+├── claim_id → ztb_claims           └── claim_text: text
+├── best_article_url: text
+├── verdict: text                   Indexes:
+├── similarity_score: float         ├── HNSW (vector_cosine_ops) on embeddings
+├── explanation_kk: text            ├── B-tree on source, published_at
+└── raw_response: jsonb             └── Unique constraints for dedup
+</pre>
+</div>
+""", unsafe_allow_html=True)
+
+    # Key DE skills
+    st.markdown("#### Key Data Engineering Practices")
+
+    skills = [
+        ("Incremental Processing", "Content hashing (MD5/SHA-256) ensures only new or changed data flows through the pipeline. No redundant API calls or duplicate embeddings."),
+        ("Pipeline Orchestration", "Airflow DAGs with task dependencies (reference sources → ZTB verification). GitHub Actions cron as cloud-native alternative."),
+        ("Vector Search (RAG)", "pgvector HNSW index for sub-second cosine similarity search across 7500+ text chunks. Two-stage retrieval with deduplication."),
+        ("Data Quality", "URL normalization, content deduplication, hash-based change detection, and incremental upserts at every pipeline stage."),
+        ("Schema Design", "Normalized PostgreSQL schema with foreign keys, composite unique constraints, and appropriate indexes for query performance."),
+        ("Cloud Deployment", "Fully automated: Neon (DB) + Render (API/UI) + GitHub Actions (scheduler). Zero-maintenance, cost-free infrastructure."),
+    ]
+
+    for title, desc in skills:
+        st.markdown(
+            f'<div style="background:rgba(99,102,241,0.08);border-left:3px solid #818cf8;'
+            f'border-radius:0 8px 8px 0;padding:0.8rem 1rem;margin-bottom:0.6rem;">'
+            f'<strong style="color:#818cf8;">{title}</strong>'
+            f'<div style="color:#cbd5e1;font-size:0.88rem;margin-top:0.3rem;">{desc}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<div style="text-align:center;margin-top:1.5rem;">'
+        '<a href="https://github.com/nuradilabyz/KZ-Fact-Checker-" target="_blank" '
+        'style="background:#818cf8;color:white;padding:0.6rem 2rem;border-radius:8px;'
+        'text-decoration:none;font-weight:600;">View on GitHub</a>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Footer ───────────────────────────────────────────────────
