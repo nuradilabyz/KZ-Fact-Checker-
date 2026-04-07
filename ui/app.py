@@ -742,7 +742,7 @@ with tab_stats:
 
     try:
         with st.spinner("Статистика жүктелуде..."):
-            resp = requests.get(f"{API_URL}/knowledge_stats", timeout=15)
+            resp = requests.get(f"{API_URL}/knowledge_stats", timeout=60)
             if resp.status_code == 200:
                 stats = resp.json()
                 articles = stats.get("articles_per_source", {})
@@ -851,61 +851,45 @@ with tab_arch:
 
     st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
-    # Pipeline overview
-    st.markdown("""
-<div style="background:rgba(30,41,59,0.6);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
-<h4 style="margin-top:0;">Data Pipeline Overview</h4>
-<pre style="color:#e2e8f0;font-size:0.85rem;line-height:1.8;overflow-x:auto;">
-┌─────────────────────────────────────────────────────────────────┐
-│                    SCHEDULER (Hourly Cron)                       │
-│              Apache Airflow / GitHub Actions                     │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │
-          ┌─────────┬───────┴───────┬──────────┐
-          ▼         ▼               ▼          ▼
-   ┌────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐
-   │Factcheck│ │ Azattyq  │ │ Informburo │ │ Tengri   │
-   │   .kz  │ │  .org    │ │    .kz     │ │ news.kz  │
-   └───┬────┘ └────┬─────┘ └─────┬──────┘ └────┬─────┘
-       │           │             │              │
-       └─────┬─────┴──────┬──────┘              │
-             ▼            ▼                     ▼
-     ┌──────────────────────────────────────────────┐
-     │          WEB SCRAPING LAYER                   │
-     │    Python · BeautifulSoup · lxml · RSS        │
-     │    Rate limiting · Content hashing (MD5)      │
-     └──────────────────┬───────────────────────────┘
-                        │
-                        ▼
-     ┌──────────────────────────────────────────────┐
-     │          TEXT PROCESSING                       │
-     │    Chunking (500 tokens, 50 overlap)          │
-     │    sentence-transformers (384-dim vectors)     │
-     └──────────────────┬───────────────────────────┘
-                        │
-                        ▼
-     ┌──────────────────────────────────────────────┐
-     │          POSTGRESQL + pgvector                │
-     │    HNSW index · Cosine similarity search      │
-     │    4 tables · Incremental upserts             │
-     └──────────────────┬───────────────────────────┘
-                        │
-          ┌─────────────┴──────────────┐
-          ▼                            ▼
-   ┌─────────────┐            ┌──────────────┐
-   │  FastAPI     │            │  ZTB.kz      │
-   │  REST API    │◄───────── │  Claims +     │
-   │  RAG Search  │           │  Verification │
-   └──────┬──────┘            └──────────────┘
-          │
-          ▼
-   ┌─────────────┐
-   │  Streamlit   │
-   │  Dashboard   │
-   └─────────────┘
-</pre>
-</div>
-""", unsafe_allow_html=True)
+    # Pipeline overview — HTML boxes
+    _box = "background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.3);border-radius:8px;padding:0.6rem 1rem;text-align:center;color:#e2e8f0;font-weight:600;font-size:0.85rem;"
+    _arrow = '<div style="text-align:center;color:#818cf8;font-size:1.2rem;margin:0.3rem 0;">▼</div>'
+    _box_green = "background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:0.6rem 1rem;text-align:center;color:#e2e8f0;font-weight:600;font-size:0.85rem;"
+    _box_orange = "background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:0.6rem 1rem;text-align:center;color:#e2e8f0;font-weight:600;font-size:0.85rem;"
+
+    st.markdown(f'<div style="{_box}">SCHEDULER (Hourly Cron)<br><span style="color:#94a3b8;font-weight:400;">Apache Airflow / GitHub Actions</span></div>', unsafe_allow_html=True)
+    st.markdown(_arrow, unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(f'<div style="{_box_green}">Factcheck.kz</div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div style="{_box_green}">Azattyq.org</div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown(f'<div style="{_box_green}">Informburo.kz</div>', unsafe_allow_html=True)
+    with c4:
+        st.markdown(f'<div style="{_box_green}">Tengrinews.kz</div>', unsafe_allow_html=True)
+    st.markdown(_arrow, unsafe_allow_html=True)
+
+    st.markdown(f'<div style="{_box}">WEB SCRAPING LAYER<br><span style="color:#94a3b8;font-weight:400;">Python, BeautifulSoup, lxml, RSS | Rate limiting, Content hashing (MD5)</span></div>', unsafe_allow_html=True)
+    st.markdown(_arrow, unsafe_allow_html=True)
+
+    st.markdown(f'<div style="{_box}">TEXT PROCESSING<br><span style="color:#94a3b8;font-weight:400;">Chunking (500 tokens, 50 overlap) | sentence-transformers (384-dim vectors)</span></div>', unsafe_allow_html=True)
+    st.markdown(_arrow, unsafe_allow_html=True)
+
+    st.markdown(f'<div style="{_box}">POSTGRESQL + pgvector<br><span style="color:#94a3b8;font-weight:400;">HNSW index, Cosine similarity search | 4 tables, Incremental upserts</span></div>', unsafe_allow_html=True)
+    st.markdown(_arrow, unsafe_allow_html=True)
+
+    c_api, c_ztb = st.columns(2)
+    with c_api:
+        st.markdown(f'<div style="{_box}">FastAPI REST API<br><span style="color:#94a3b8;font-weight:400;">RAG Search Pipeline</span></div>', unsafe_allow_html=True)
+    with c_ztb:
+        st.markdown(f'<div style="{_box_orange}">ZTB.kz<br><span style="color:#94a3b8;font-weight:400;">Claims Extraction + LLM Verification</span></div>', unsafe_allow_html=True)
+    st.markdown(_arrow, unsafe_allow_html=True)
+
+    st.markdown(f'<div style="{_box_green}">STREAMLIT DASHBOARD<br><span style="color:#94a3b8;font-weight:400;">Interactive UI with date filtering & real-time results</span></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
     # Tech stack
     st.markdown("#### Tech Stack")
@@ -978,25 +962,36 @@ with tab_arch:
 
     # Data model
     st.markdown("#### Data Model")
-    st.markdown("""
-<div style="background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1.2rem;">
-<pre style="color:#e2e8f0;font-size:0.82rem;line-height:1.8;">
-source_articles (PK: url)           knowledge_chunks (PK: chunk_id)
-├── source: text                    ├── article_url → source_articles
-├── title: text                     ├── source: text
-├── clean_text: text                ├── chunk_text: text
-├── content_hash: text (MD5)        ├── embedding: vector(384)  ← HNSW index
-├── verdict_label: text             └── chunk_hash: text (SHA-256)
-└── published_at: timestamptz
-                                    ztb_claims (PK: claim_id)
-verifications (PK: id)              ├── article_url → source_articles
-├── claim_id → ztb_claims           └── claim_text: text
-├── best_article_url: text
-├── verdict: text                   Indexes:
-├── similarity_score: float         ├── HNSW (vector_cosine_ops) on embeddings
-├── explanation_kk: text            ├── B-tree on source, published_at
-└── raw_response: jsonb             └── Unique constraints for dedup
-</pre>
+
+    _tbl = "background:rgba(30,41,59,0.5);border:1px solid rgba(148,163,184,0.15);border-radius:12px;padding:1rem;margin-bottom:0.5rem;"
+    _th = "color:#818cf8;font-weight:700;font-size:0.95rem;margin:0 0 0.5rem;"
+    _li = "color:#cbd5e1;font-size:0.82rem;line-height:1.8;margin:0;padding-left:1rem;"
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"""
+<div style="{_tbl}">
+<div style="{_th}">source_articles <span style="color:#94a3b8;font-weight:400;">(PK: url)</span></div>
+<div style="{_li}">source: text<br>title: text<br>clean_text: text<br>content_hash: text (MD5)<br>verdict_label: text<br>published_at: timestamptz</div>
+</div>
+<div style="{_tbl}">
+<div style="{_th}">verifications <span style="color:#94a3b8;font-weight:400;">(PK: id)</span></div>
+<div style="{_li}">claim_id → ztb_claims<br>best_article_url: text<br>verdict: text<br>similarity_score: float<br>explanation_kk: text<br>raw_response: jsonb</div>
+</div>
+""", unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"""
+<div style="{_tbl}">
+<div style="{_th}">knowledge_chunks <span style="color:#94a3b8;font-weight:400;">(PK: chunk_id)</span></div>
+<div style="{_li}">article_url → source_articles<br>source: text<br>chunk_text: text<br>embedding: <strong style="color:#10b981;">vector(384)</strong> ← HNSW index<br>chunk_hash: text (SHA-256)</div>
+</div>
+<div style="{_tbl}">
+<div style="{_th}">ztb_claims <span style="color:#94a3b8;font-weight:400;">(PK: claim_id)</span></div>
+<div style="{_li}">article_url → source_articles<br>claim_text: text</div>
+</div>
+<div style="{_tbl}">
+<div style="{_th}">Indexes</div>
+<div style="{_li}">HNSW (vector_cosine_ops) on embeddings<br>B-tree on source, published_at<br>Unique constraints for dedup</div>
 </div>
 """, unsafe_allow_html=True)
 
