@@ -8,7 +8,7 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -22,12 +22,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements/ingestion.txt
 
-      - name: Ingest reference sources (parallel)
+      - name: Ingest reference sources
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          EMBEDDING_MODEL: text-embedding-3-small
-          LLM_MODEL: gpt-4o-mini
+          OPENAI_API_KEY: ${{ secrets.ALEM_API_KEY }}
+          LLM_BASE_URL: https://llm.alem.ai/v1
+          LLM_MODEL: kazllm
           FETCH_DELAY_SECONDS: "1.5"
         run: |
           python -c "
@@ -42,9 +42,10 @@ jobs:
       - name: Ingest ZTB + verify claims
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          EMBEDDING_MODEL: text-embedding-3-small
-          LLM_MODEL: gpt-4o-mini
+          OPENAI_API_KEY: ${{ secrets.ALEM_API_KEY }}
+          LLM_BASE_URL: https://llm.alem.ai/v1
+          LLM_MODEL: kazllm
+          API_URL: https://kz-factchecker-api.onrender.com
           FETCH_DELAY_SECONDS: "1.5"
         run: |
           python -c "

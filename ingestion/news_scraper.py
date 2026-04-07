@@ -530,14 +530,17 @@ def chunk_and_embed(conn, article_url: str, source: str, text: str):
 # ── ZTB Claim Extraction & Verification ──────────────────────
 
 def extract_claims_from_text(text: str) -> list[str]:
-    """Use GPT to extract atomic checkable claims from article text."""
+    """Use LLM to extract atomic checkable claims from article text."""
     import openai
 
-    client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = openai.OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("LLM_BASE_URL", "https://llm.alem.ai/v1"),
+    )
 
     try:
         resp = client.chat.completions.create(
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            model=os.getenv("LLM_MODEL", "kazllm"),
             messages=[
                 {
                     "role": "system",

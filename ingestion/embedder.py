@@ -1,50 +1,44 @@
 """
-Embedding Pipeline — embeds new chunks via OpenAI text-embedding-3-small
+Embedding Pipeline — embeds new chunks via sentence-transformers (local, free)
 and stores them in pgvector.
 
+- Uses paraphrase-multilingual-MiniLM-L12-v2 (384-dim, multilingual incl. Kazakh)
 - Checks (article_url, chunk_hash) uniqueness before inserting
-- Batches API calls (max 100 texts per batch)
+- Batches encoding for efficiency
 """
 import logging
 import os
 from typing import Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
 logger = logging.getLogger("embedder")
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-EMBEDDING_DIM = 1536  # text-embedding-3-small default
-BATCH_SIZE = 100
+EMBEDDING_MODEL_NAME = os.getenv(
+    "EMBEDDING_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+)
+EMBEDDING_DIM = 384
+BATCH_SIZE = 64
 
-_client: Optional[OpenAI] = None
+_model: Optional[SentenceTransformer] = None
 
 
-def _get_openai_client() -> OpenAI:
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    return _client
+def _get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        logger.info(f"Loading embedding model: {EMBEDDING_MODEL_NAME}")
+        _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    return _model
 
 
 def compute_embeddings(texts: list[str]) -> list[list[float]]:
-    """Compute embeddings for a list of texts using OpenAI API."""
-    client = _get_openai_client()
-    all_embeddings = []
-
-    for i in range(0, len(texts), BATCH_SIZE):
-        batch = texts[i : i + BATCH_SIZE]
-        response = client.embeddings.create(
-            input=batch,
-            model=EMBEDDING_MODEL,
-        )
-        batch_embeddings = [item.embedding for item in response.data]
-        all_embeddings.extend(batch_embeddings)
-
-    return all_embeddings
+    """Compute embeddings for a list of texts using local model."""
+    model = _get_model()
+    embeddings = model.encode(texts, batch_size=BATCH_SIZE, show_progress_bar=False, normalize_embeddings=True)
+    return [emb.tolist() for emb in embeddings]
 
 
 def embed_and_store_chunks(conn, article_url: str, chunks: list[dict]):
@@ -74,10 +68,10 @@ def embed_and_store_chunks(conn, article_url: str, chunks: list[dict]):
     new_chunks = [c for c in chunks if c["chunk_hash"] not in existing_hashes]
 
     if not new_chunks:
-        logger.info(f"  ⏭  All {len(chunks)} chunks already embedded for {article_url}")
+        logger.info(f"  All {len(chunks)} chunks already embedded for {article_url}")
         return
 
-    logger.info(f"  🧮 Embedding {len(new_chunks)} new chunks (skipped {len(existing_hashes)} existing)")
+    logger.info(f"  Embedding {len(new_chunks)} new chunks (skipped {len(existing_hashes)} existing)")
 
     # Compute embeddings
     texts = [c["chunk_text"] for c in new_chunks]
@@ -95,4 +89,4 @@ def embed_and_store_chunks(conn, article_url: str, chunks: list[dict]):
                 (article_url, chunk["chunk_text"], str(embedding), chunk["chunk_hash"]),
             )
     conn.commit()
-    logger.info(f"  ✅ Stored {len(new_chunks)} chunks for {article_url}")
+    logger.info(f"  Stored {len(new_chunks)} chunks for {article_url}")

@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     article_url     TEXT NOT NULL REFERENCES source_articles(url) ON DELETE CASCADE,
     source          TEXT NOT NULL,                -- denormalized for fast filtering
     chunk_text      TEXT NOT NULL,
-    embedding       vector(1536),                -- text-embedding-3-small
+    embedding       vector(384),                 -- paraphrase-multilingual-MiniLM-L12-v2
     chunk_hash      TEXT NOT NULL,               -- SHA-256 of chunk_text
     created_at      TIMESTAMPTZ DEFAULT now(),
     UNIQUE(article_url, chunk_hash)

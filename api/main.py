@@ -40,9 +40,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── OpenAI client ────────────────────────────────────────────
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+# ── LLM client (Alem.AI, OpenAI-compatible) ─────────────────
+LLM_MODEL = os.getenv("LLM_MODEL", "kazllm")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://llm.alem.ai/v1")
 
 _openai_client = None
 
@@ -50,8 +50,28 @@ _openai_client = None
 def get_openai() -> OpenAI:
     global _openai_client
     if _openai_client is None:
-        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=LLM_BASE_URL,
+        )
     return _openai_client
+
+
+# ── Embedding model (local, free) ───────────────────────────
+from sentence_transformers import SentenceTransformer
+
+_embed_model = None
+
+
+def get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        model_name = os.getenv(
+            "EMBEDDING_MODEL_NAME",
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        )
+        _embed_model = SentenceTransformer(model_name)
+    return _embed_model
 
 
 def _normalize_match_text(text: str) -> str:
@@ -147,10 +167,10 @@ def check_claim(req: CheckRequest):
     """
     client = get_openai()
 
-    # 1. Embed
+    # 1. Embed (local model)
     try:
-        emb_resp = client.embeddings.create(model=EMBEDDING_MODEL, input=req.claim)
-        query_embedding = emb_resp.data[0].embedding
+        model = get_embed_model()
+        query_embedding = model.encode(req.claim, normalize_embeddings=True).tolist()
     except Exception as e:
         logger.error(f"Embedding failed: {e}")
         raise HTTPException(status_code=500, detail=f"Embedding error: {e}")
