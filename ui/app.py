@@ -415,7 +415,9 @@ def _article_border_style(verdicts: list[str]) -> tuple[str, str, str]:
 with tab_ztb:
     st.markdown("### 📰 ZTB.kz мақалаларының тексеру нәтижелері")
 
-    col_date, col_btn = st.columns([3, 1])
+    col_filter, col_date, col_btn = st.columns([2, 3, 1])
+    with col_filter:
+        filter_mode = st.radio("Көрсету:", ["Барлығы", "Күн бойынша"], horizontal=True, key="ztb_filter_mode")
     with col_date:
         selected_date = st.date_input(
             "Күнді таңдаңыз:",
@@ -423,6 +425,7 @@ with tab_ztb:
             min_value=date(2025, 1, 1),
             max_value=date.today(),
             key="ztb_date",
+            disabled=(filter_mode == "Барлығы"),
         )
     with col_btn:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -431,16 +434,21 @@ with tab_ztb:
 
     try:
         with st.spinner("Деректер жүктелуде..."):
-            date_str = selected_date.strftime("%Y-%m-%d") if selected_date else ""
-            api_params = f"limit=50&date={date_str}" if date_str else "limit=50"
-            resp = requests.get(f"{API_URL}/ztb_results?{api_params}", timeout=30)
+            if filter_mode == "Күн бойынша":
+                date_str = selected_date.strftime("%Y-%m-%d")
+                api_params = f"limit=50&date={date_str}"
+            else:
+                api_params = "limit=50"
+                date_str = ""
+            resp = requests.get(f"{API_URL}/ztb_results?{api_params}", timeout=60)
             if resp.status_code == 200:
                 payload = resp.json()
                 ztb_articles = payload.get("ztb_results", [])
                 total_verified_articles = payload.get("total_verified_articles", len(ztb_articles))
 
                 if not ztb_articles:
-                    st.info(f"📅 {selected_date.strftime('%Y-%m-%d')} күніне тексерілген ZTB мақалалары табылмады.")
+                    msg = f"📅 {selected_date.strftime('%Y-%m-%d')} күніне тексерілген ZTB мақалалары табылмады." if date_str else "Әзірге тексерілген ZTB мақалалары жоқ."
+                    st.info(msg)
                 else:
                     st.markdown(
                         f'<div class="stat-card" style="margin-bottom:1rem;">'
