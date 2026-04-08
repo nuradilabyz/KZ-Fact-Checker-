@@ -8,7 +8,7 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -19,15 +19,22 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/ingestion.txt
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: pip install -r requirements/ingestion.txt
 
-      - name: Ingest reference sources
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama and pull model
+        run: |
+          ollama serve &
+          sleep 5
+          ollama pull llama3.2
+          echo "Ollama ready with llama3.2"
+
+      - name: Ingest reference sources (scrape + embed)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENAI_API_KEY: ${{ secrets.ALEM_API_KEY }}
-          LLM_BASE_URL: https://llm.alem.ai/v1
-          LLM_MODEL: kazllm
           FETCH_DELAY_SECONDS: "1.5"
         run: |
           python -c "
@@ -39,13 +46,11 @@ jobs:
                   print(f'WARN: {source} failed: {e}')
           "
 
-      - name: Ingest ZTB + verify claims
+      - name: Ingest ZTB + extract claims + verify
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENAI_API_KEY: ${{ secrets.ALEM_API_KEY }}
-          LLM_BASE_URL: https://llm.alem.ai/v1
-          LLM_MODEL: kazllm
-          API_URL: https://kz-factchecker-api.onrender.com
+          OLLAMA_URL: http://localhost:11434
+          OLLAMA_MODEL: llama3.2
           FETCH_DELAY_SECONDS: "1.5"
         run: |
           python -c "

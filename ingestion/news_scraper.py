@@ -529,53 +529,124 @@ def chunk_and_embed(conn, article_url: str, source: str, text: str):
 
 # ── ZTB Claim Extraction & Verification ──────────────────────
 
-def extract_claims_from_text(text: str) -> list[str]:
-    """Use LLM to extract atomic checkable claims from article text."""
-    import openai
-
-    client = openai.OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("LLM_BASE_URL", "https://llm.alem.ai/v1"),
-    )
-
+def _ollama_chat(messages: list[dict], temperature: float = 0.1) -> str | None:
+    """Send chat request to local Ollama server."""
+    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2")
     try:
-        resp = client.chat.completions.create(
-            model=os.getenv("LLM_MODEL", "kazllm"),
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Сен мәтіннен тексерілетін фактілерді (claim) шығарып алатын жүйесің.\n"
-                        "Берілген мәтіннен тек нақты фактілік мәлімдемелерді JSON массиві ретінде қайтар.\n"
-                        "Пікірлер емес, тек фактілерді шығар. Максимум 5 claim.\n"
-                        'Формат: ["claim1", "claim2", ...]'
-                    ),
-                },
-                {"role": "user", "content": text[:3000]},
-            ],
-            temperature=0.1,
-            max_completion_tokens=500,
+        resp = requests.post(
+            f"{ollama_url}/api/chat",
+            json={"model": model, "messages": messages, "stream": False,
+                  "options": {"temperature": temperature, "num_predict": 500}},
+            timeout=120,
         )
-        raw = resp.choices[0].message.content.strip()
-        claims = json.loads(raw)
-        if isinstance(claims, list):
-            return [c for c in claims if isinstance(c, str) and len(c) > 10]
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "").strip()
     except Exception as e:
-        logger.error(f"  Claim extraction failed: {e}")
+        logger.error(f"  Ollama chat error: {e}")
+        return None
+
+
+def extract_claims_from_text(text: str) -> list[str]:
+    """Use local Ollama LLM to extract atomic checkable claims from article text."""
+    raw = _ollama_chat([
+        {
+            "role": "system",
+            "content": (
+                "You extract checkable factual claims from news text.\n"
+                "Return ONLY a JSON array of claims in the original language.\n"
+                "No opinions, only facts. Maximum 5 claims.\n"
+                'Format: ["claim1", "claim2", ...]'
+            ),
+        },
+        {"role": "user", "content": text[:3000]},
+    ])
+    if not raw:
+        return []
+    try:
+        # Try to find JSON array in response
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            claims = json.loads(raw[start:end])
+            if isinstance(claims, list):
+                return [c for c in claims if isinstance(c, str) and len(c) > 10]
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"  Claim extraction JSON parse failed: {e}")
     return []
 
 
 def verify_claim_against_kb(claim_text: str) -> dict | None:
-    """Verify a claim using the /check API endpoint."""
-    api_url = os.getenv("API_URL", "http://api:8000")
+    """Verify a claim using vector search + local Ollama LLM verdict."""
+    from ingestion.embedder import compute_embeddings
+
     try:
-        resp = requests.post(
-            f"{api_url}/check",
-            json={"claim": claim_text, "top_k": 5, "similarity_threshold": 0.6},
-            timeout=60,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        conn = get_db_conn()
+        # Embed claim
+        embeddings = compute_embeddings([claim_text])
+        query_emb = embeddings[0]
+        emb_str = str(query_emb)
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT kc.article_url, kc.chunk_text, kc.source,
+                   1 - (kc.embedding <=> %s::vector) AS score,
+                   sa.title, sa.verdict_label
+            FROM knowledge_chunks kc
+            JOIN source_articles sa ON sa.url = kc.article_url
+            ORDER BY kc.embedding <=> %s::vector
+            LIMIT 5
+        """, (emb_str, emb_str))
+        evidence = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not evidence or evidence[0][3] < 0.35:
+            return {
+                "verdict": "NOT_ENOUGH_INFO", "confidence": 0.0,
+                "explanation_kk": "Деректер қорынан бұл мәлімдемеге қатысты ақпарат табылмады.",
+                "best_match": {}, "evidence": [],
+            }
+
+        # Build context
+        context = ""
+        ev_list = []
+        for i, ev in enumerate(evidence):
+            if ev[3] >= 0.35:
+                context += f"[{i+1}] SOURCE: {ev[2]} | TITLE: {ev[4]} | SIM: {ev[3]:.0%}\n{ev[1][:600]}\n\n"
+                ev_list.append({"url": ev[0], "snippet": ev[1][:300], "source": ev[2],
+                                "similarity_score": round(ev[3], 4), "title": ev[4]})
+
+        # LLM verdict via Ollama
+        raw = _ollama_chat([
+            {"role": "system", "content": (
+                "You are a fact-checker. Compare the CLAIM against EVIDENCE and output ONLY valid JSON:\n"
+                '{"verdict": "SUPPORTED"|"REFUTED"|"NOT_ENOUGH_INFO", "confidence": 0.0-1.0, "explanation_kk": "explanation in Kazakh"}'
+            )},
+            {"role": "user", "content": f"CLAIM: {claim_text}\n\nEVIDENCE:\n{context}\nJSON:"},
+        ], temperature=0.0)
+
+        verdict = "NOT_ENOUGH_INFO"
+        confidence = 0.0
+        explanation = ""
+        if raw:
+            try:
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                if start >= 0 and end > start:
+                    result = json.loads(raw[start:end])
+                    verdict = result.get("verdict", "NOT_ENOUGH_INFO")
+                    confidence = float(result.get("confidence", 0))
+                    explanation = result.get("explanation_kk", "")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        best = ev_list[0] if ev_list else {}
+        return {
+            "claim": claim_text, "verdict": verdict, "confidence": confidence,
+            "explanation_kk": explanation, "evidence": ev_list,
+            "best_match": best,
+        }
     except Exception as e:
         logger.error(f"  Verification API error: {e}")
         return None

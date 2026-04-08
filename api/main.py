@@ -16,7 +16,6 @@ import re
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from api.db import get_db_connection, vector_search
@@ -40,21 +39,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── LLM client (Alem.AI, OpenAI-compatible) ─────────────────
-LLM_MODEL = os.getenv("LLM_MODEL", "kazllm")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://llm.alem.ai/v1")
-
-_openai_client = None
+# ── LLM client (Ollama local or remote) ──────────────────────
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 
-def get_openai() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=LLM_BASE_URL,
+def _ollama_chat(messages: list[dict], temperature: float = 0.0) -> str | None:
+    """Send chat to Ollama. Returns None if Ollama is unavailable."""
+    import httpx
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
+                  "options": {"temperature": temperature, "num_predict": 500}},
+            timeout=120,
         )
-    return _openai_client
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "").strip()
+    except Exception:
+        return None
 
 
 # ── Embedding model (local, free) ───────────────────────────
@@ -156,17 +159,41 @@ def health():
     return {"status": "ok", "service": "kz-factchecker-v2"}
 
 
+def _algorithmic_verdict(claim: str, evidence_blocks: list[dict]) -> dict:
+    """Determine verdict using similarity scores + factcheck labels (no LLM needed)."""
+    best = evidence_blocks[0] if evidence_blocks else {}
+    top_sim = best.get("similarity_score", 0.0)
+
+    # Check factcheck.kz verdict labels first
+    heuristic = _factcheck_label_heuristic(claim, evidence_blocks)
+    if heuristic:
+        return heuristic
+
+    # Algorithmic verdict based on similarity
+    if top_sim >= 0.80:
+        verdict, confidence = "SUPPORTED", round(top_sim, 2)
+        explanation = f"Бұл мәлімдеме деректер қорындағы мақаламен {int(top_sim*100)}% ұқсас. Жоғары ұқсастық негізінде расталды."
+    elif top_sim >= 0.60:
+        verdict, confidence = "SUPPORTED", round(top_sim * 0.8, 2)
+        explanation = f"Бұл мәлімдеме деректер қорындағы мақаламен {int(top_sim*100)}% ұқсас. Орташа сенімділікпен расталды."
+    elif top_sim >= 0.45:
+        verdict, confidence = "NOT_ENOUGH_INFO", round(top_sim * 0.5, 2)
+        explanation = f"Деректер қорынан ұқсас ақпарат табылды ({int(top_sim*100)}%), бірақ нақты тексеру үшін жеткіліксіз."
+    else:
+        verdict, confidence = "NOT_ENOUGH_INFO", 0.0
+        explanation = "Деректер қорынан бұл мәлімдемеге қатысты жеткілікті ақпарат табылмады."
+
+    return {"verdict": verdict, "confidence": confidence, "explanation_kk": explanation}
+
+
 @app.post("/check")
 def check_claim(req: CheckRequest):
     """
     Verify a claim:
-    1. Embed claim → vector
-    2. pgvector search → top evidence from knowledge_chunks
-    3. LLM verdict
-    4. Return structured JSON
+    1. Embed claim → vector (local model)
+    2. pgvector search → top evidence
+    3. Algorithmic verdict (similarity + factcheck labels)
     """
-    client = get_openai()
-
     # 1. Embed (local model)
     try:
         model = get_embed_model()
@@ -193,78 +220,17 @@ def check_claim(req: CheckRequest):
             "retrieval_debug": {"evidence_count": 0, "top_similarity": 0.0},
         }
 
-    heuristic_result = _factcheck_label_heuristic(req.claim, evidence_blocks)
-    if heuristic_result:
-        best = evidence_blocks[0] if evidence_blocks else {}
-        top_sim = best.get("similarity_score", 0.0)
-        return {
-            "claim": req.claim,
-            "verdict": heuristic_result["verdict"],
-            "confidence": heuristic_result["confidence"],
-            "explanation_kk": heuristic_result["explanation_kk"],
-            "evidence": evidence_blocks,
-            "best_match": best,
-            "retrieval_debug": {
-                "evidence_count": len(evidence_blocks),
-                "top_similarity": top_sim,
-                "matched_by": "factcheck_label_heuristic",
-            },
-        }
-
-    # 3. Build context for LLM — include title, source type, verdict label
-    context_parts = []
-    for i, ev in enumerate(evidence_blocks, 1):
-        source_label = ev.get("source", "?")
-        title = ev.get("title", "")
-        verdict_label = ev.get("source_verdict", "")
-        sim_score = ev.get("similarity_score", 0)
-
-        header = f"[{i}] SOURCE: {source_label} | TITLE: {title} | SIMILARITY: {sim_score:.0%}"
-        if verdict_label:
-            header += f" | VERDICT_LABEL: {verdict_label}"
-        context_parts.append(
-            f"{header}\n{ev['snippet'][:1200]}"
-        )
-    context_str = "\n\n".join(context_parts)
-
-    # 4. LLM verdict
-    try:
-        llm_resp = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        f"CLAIM: {req.claim}\n\n"
-                        f"EVIDENCE:\n{context_str}\n\n"
-                        "IMPORTANT: Read each evidence carefully. Check if it discusses the EXACT SAME specific fact as the claim, not just the same general topic.\n"
-                        "Respond in JSON: {\"verdict\", \"confidence\", \"explanation_kk\"}"
-                    ),
-                },
-            ],
-            temperature=0.0,
-            max_completion_tokens=500,
-            response_format={"type": "json_object"},
-        )
-        raw = llm_resp.choices[0].message.content
-        result = json.loads(raw)
-    except Exception as e:
-        logger.error(f"LLM error: {e}")
-        result = {
-            "verdict": "NOT_ENOUGH_INFO",
-            "confidence": 0.0,
-            "explanation_kk": f"LLM қатесі: {e}",
-        }
+    # 3. Algorithmic verdict
+    result = _algorithmic_verdict(req.claim, evidence_blocks)
 
     best = evidence_blocks[0] if evidence_blocks else {}
     top_sim = best.get("similarity_score", 0.0)
 
     return {
         "claim": req.claim,
-        "verdict": result.get("verdict", "NOT_ENOUGH_INFO"),
-        "confidence": result.get("confidence", 0.0),
-        "explanation_kk": result.get("explanation_kk", ""),
+        "verdict": result["verdict"],
+        "confidence": result["confidence"],
+        "explanation_kk": result["explanation_kk"],
         "evidence": evidence_blocks,
         "best_match": best,
         "retrieval_debug": {
@@ -276,37 +242,36 @@ def check_claim(req: CheckRequest):
 
 @app.post("/extract_claims")
 def extract_claims(req: ExtractRequest):
-    """Extract checkable claims from text using GPT."""
-    client = get_openai()
-    try:
-        resp = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Сен мәтіннен тексерілетін фактілерді (claim) шығарып алатын жүйесің.\n"
-                        "Берілген мәтіннен тек нақты фактілік мәлімдемелерді JSON ретінде қайтар.\n"
-                        "Пікірлер емес, тек фактілерді шығар. Максимум 5 claim.\n"
-                        "Әр claim қысқа, нақты бір фактіні қамтуы керек.\n\n"
-                        'Формат: {"claims": ["claim1", "claim2", ...], "topics": ["theme1"]}'
-                    ),
-                },
-                {"role": "user", "content": req.text[:3000]},
-            ],
-            temperature=0.1,
-            max_completion_tokens=500,
-            response_format={"type": "json_object"},
-        )
-        raw = resp.choices[0].message.content
-        parsed = json.loads(raw)
-        return {
-            "claims": parsed.get("claims", []),
-            "topics": parsed.get("topics", []),
-        }
-    except Exception as e:
-        logger.error(f"Extract claims error: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM error: {e}")
+    """Extract checkable claims from text. Uses Ollama if available, else rule-based."""
+    # Try Ollama first
+    raw = _ollama_chat([
+        {"role": "system", "content": (
+            "Extract checkable factual claims from the text. Return ONLY a JSON object:\n"
+            '{"claims": ["claim1", "claim2"], "topics": ["topic1"]}\n'
+            "Max 5 claims. Only facts, not opinions."
+        )},
+        {"role": "user", "content": req.text[:3000]},
+    ])
+    if raw:
+        try:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                parsed = json.loads(raw[start:end])
+                return {
+                    "claims": parsed.get("claims", [])[:5],
+                    "topics": parsed.get("topics", []),
+                }
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Fallback: rule-based sentence extraction
+    sentences = [s.strip() for s in re.split(r'[.!?\n]', req.text[:3000]) if len(s.strip()) > 20]
+    # Filter: keep sentences with numbers, dates, or proper nouns (likely factual)
+    factual = [s for s in sentences if re.search(r'\d+|%|млн|млрд|мың|тысяч|миллион', s)]
+    if not factual:
+        factual = sentences[:5]
+    return {"claims": factual[:5], "topics": []}
 
 
 @app.get("/ztb_results")
