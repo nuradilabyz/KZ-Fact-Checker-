@@ -460,20 +460,47 @@ with tab_ztb:
             if resp.status_code == 200:
                 payload = resp.json()
                 ztb_articles = payload.get("ztb_results", [])
-                total_verified_articles = payload.get("total_verified_articles", len(ztb_articles))
+                totals = payload.get("totals_by_verdict", {})
+                t_supported = totals.get("SUPPORTED", {})
+                t_refuted = totals.get("REFUTED", {})
+                t_nei = totals.get("NOT_ENOUGH_INFO", {})
+
+                # Always show 3 totals cards (live from DB)
+                col_s, col_r, col_n = st.columns(3)
+                with col_s:
+                    st.markdown(
+                        f'<div class="stat-card" style="border-left:4px solid #10b981;">'
+                        f'<div class="stat-number" style="color:#10b981;">{t_supported.get("articles", 0)}</div>'
+                        f'<div class="stat-label">✅ Расталды<br>'
+                        f'<small>({t_supported.get("claims", 0)} мәлімдеме)</small></div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col_r:
+                    st.markdown(
+                        f'<div class="stat-card" style="border-left:4px solid #ef4444;">'
+                        f'<div class="stat-number" style="color:#ef4444;">{t_refuted.get("articles", 0)}</div>'
+                        f'<div class="stat-label">❌ Жалған<br>'
+                        f'<small>({t_refuted.get("claims", 0)} мәлімдеме)</small></div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col_n:
+                    st.markdown(
+                        f'<div class="stat-card" style="border-left:4px solid #f59e0b;">'
+                        f'<div class="stat-number" style="color:#f59e0b;">{t_nei.get("articles", 0)}</div>'
+                        f'<div class="stat-label">⚠️ Ақпарат жеткіліксіз<br>'
+                        f'<small>({t_nei.get("claims", 0)} мәлімдеме)</small></div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                st.markdown('<div style="margin:1rem 0;"></div>', unsafe_allow_html=True)
 
                 if not ztb_articles:
                     msg = f"📅 {selected_date.strftime('%Y-%m-%d')} күніне тексерілген ZTB мақалалары табылмады." if date_str else "Әзірге тексерілген ZTB мақалалары жоқ."
                     st.info(msg)
                 else:
-                    st.markdown(
-                        f'<div class="stat-card" style="margin-bottom:1rem;">'
-                        f'<div class="stat-number">{total_verified_articles}</div>'
-                        f'<div class="stat-label">Тексерілген мақалалар (✅ Расталды / ❌ Жалған)</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
                     for article in ztb_articles:
                         claims = article.get("claims", [])
                         verdicts_list = [c.get("verdict", "") for c in claims]

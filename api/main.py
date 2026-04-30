@@ -351,15 +351,27 @@ def get_ztb_results(limit: int = 30, date: str | None = None, verdict: str | Non
 
         cur.execute(
             """
-            SELECT COUNT(DISTINCT sa.url)
+            SELECT v.verdict, COUNT(DISTINCT sa.url) AS articles, COUNT(*) AS claims
             FROM source_articles sa
             JOIN ztb_claims zc ON zc.article_url = sa.url
             JOIN verifications v ON v.claim_id = zc.claim_id
             WHERE sa.source = 'ztb'
-              AND v.verdict IN ('SUPPORTED', 'REFUTED')
+            GROUP BY v.verdict
             """,
         )
-        total_verified_articles = cur.fetchone()[0]
+        rows_totals = cur.fetchall()
+        totals_by_verdict = {
+            "SUPPORTED": {"articles": 0, "claims": 0},
+            "REFUTED": {"articles": 0, "claims": 0},
+            "NOT_ENOUGH_INFO": {"articles": 0, "claims": 0},
+        }
+        for r in rows_totals:
+            v_name = r[0]
+            if v_name in totals_by_verdict:
+                totals_by_verdict[v_name] = {"articles": r[1], "claims": r[2]}
+        total_verified_articles = (
+            totals_by_verdict["SUPPORTED"]["articles"] + totals_by_verdict["REFUTED"]["articles"]
+        )
 
         if date_filter:
             cur.execute(
@@ -481,6 +493,7 @@ def get_ztb_results(limit: int = 30, date: str | None = None, verdict: str | Non
         return {
             "ztb_results": result,
             "total_verified_articles": total_verified_articles,
+            "totals_by_verdict": totals_by_verdict,
         }
 
     except Exception as e:
