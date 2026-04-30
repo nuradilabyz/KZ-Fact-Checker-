@@ -70,13 +70,24 @@ def text_search(
         return f"{(source or '').strip().lower()}::{(title or '').strip().lower()}"
 
     import re
-    words = [w.lower() for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 2]
-    if not words:
+    # Stop words to ignore for overlap calculation
+    STOP_WORDS = {
+        "млрд", "миллиард", "миллион", "млн", "тыс", "тысяч", "тенге",
+        "процент", "процентов", "год", "года", "лет", "месяц",
+        "доллар", "долларов", "евро", "рубль", "рублей",
+        "был", "была", "были", "это", "этот", "эта", "эти",
+        "что", "как", "где", "когда", "который", "которая", "которые",
+        "the", "is", "of", "in", "to", "and", "for", "with",
+        "бар", "емес", "болды", "болған",
+    }
+    all_words = [w.lower() for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 2]
+    meaningful = [w for w in all_words if w not in STOP_WORDS]
+    if len(meaningful) < 2:
         return []
+    words = meaningful
 
-    # Use OR to find candidate chunks, then filter by word overlap
-    tsquery = " | ".join(words)
-    total_words = len(words)
+    tsquery = " | ".join(all_words)
+    total_words = len(meaningful)
 
     sql = """
         SELECT
@@ -109,17 +120,17 @@ def text_search(
         title_lower = (row[5] or "").lower()
         combined = chunk_text_lower + " " + title_lower
 
-        # Count how many query words appear in the chunk
-        matched_words = sum(1 for w in words if w in combined)
+        # Count how many MEANINGFUL words appear in the chunk
+        matched_words = sum(1 for w in meaningful if w in combined)
         word_overlap = matched_words / total_words
 
-        # Require at least 60% of query words to appear, OR all words for short queries
-        if total_words <= 2:
+        # Stricter overlap: meaningful words only
+        if total_words <= 3:
             min_overlap = 1.0
-        elif total_words <= 4:
-            min_overlap = 0.75
+        elif total_words <= 5:
+            min_overlap = 0.85
         else:
-            min_overlap = 0.6
+            min_overlap = 0.7
 
         if word_overlap < min_overlap:
             continue
