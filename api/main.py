@@ -157,15 +157,15 @@ def _algorithmic_verdict(claim: str, evidence_blocks: list[dict]) -> dict:
     # Count how many evidence blocks have high relevance
     strong_matches = sum(1 for ev in evidence_blocks if ev.get("similarity_score", 0) >= 0.5)
 
-    if top_score >= 0.7 and strong_matches >= 2:
+    if top_score >= 0.95 and strong_matches >= 2:
         verdict, confidence = "SUPPORTED", round(top_score, 2)
-        explanation = f"Деректер қорынан {strong_matches} ұқсас мақала табылды (ең жоғары релеванттық: {int(top_score*100)}%). Жоғары сенімділікпен расталды."
-    elif top_score >= 0.4:
-        verdict, confidence = "SUPPORTED", round(top_score * 0.8, 2)
-        explanation = f"Деректер қорынан ұқсас ақпарат табылды (релеванттық: {int(top_score*100)}%). Орташа сенімділікпен расталды."
-    elif top_score >= 0.15:
+        explanation = f"Деректер қорынан {strong_matches} ұқсас мақала табылды (сөздердің {int(top_score*100)}%-і сәйкес келеді). Жоғары сенімділікпен расталды."
+    elif top_score >= 0.85:
+        verdict, confidence = "SUPPORTED", round(top_score * 0.85, 2)
+        explanation = f"Деректер қорынан ұқсас ақпарат табылды (сөздердің {int(top_score*100)}%-і сәйкес келеді). Орташа сенімділікпен расталды."
+    elif top_score >= 0.6:
         verdict, confidence = "NOT_ENOUGH_INFO", round(top_score * 0.5, 2)
-        explanation = f"Деректер қорынан ішінара ұқсас ақпарат табылды ({int(top_score*100)}%), бірақ нақты тексеру үшін жеткіліксіз."
+        explanation = f"Деректер қорынан ішінара ұқсас ақпарат табылды (сөздердің {int(top_score*100)}%-і сәйкес келеді), бірақ нақты тексеру үшін жеткіліксіз."
     else:
         verdict, confidence = "NOT_ENOUGH_INFO", 0.0
         explanation = "Деректер қорынан бұл мәлімдемеге қатысты жеткілікті ақпарат табылмады."

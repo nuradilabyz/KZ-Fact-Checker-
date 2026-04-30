@@ -59,7 +59,7 @@ def text_search(
 ) -> list[dict]:
     """
     PostgreSQL full-text search on knowledge_chunks.
-    Uses ts_rank for relevance scoring (no embeddings needed).
+    Score = fraction of query words that actually appear in the chunk.
     """
     def _normalized_article_key(url: str, source: str, title: str) -> str:
         if url:
@@ -69,13 +69,14 @@ def text_search(
             return norm_url
         return f"{(source or '').strip().lower()}::{(title or '').strip().lower()}"
 
-    # Build tsquery: replace whitespace with | (OR) for fuzzy matching
-    # Strip non-word chars, keep words >2 chars
     import re
-    words = [w for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 2]
+    words = [w.lower() for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 2]
     if not words:
         return []
+
+    # Use OR to find candidate chunks, then filter by word overlap
     tsquery = " | ".join(words)
+    total_words = len(words)
 
     sql = """
         SELECT
@@ -83,38 +84,54 @@ def text_search(
             kc.article_url,
             kc.chunk_text,
             kc.source,
-            ts_rank_cd(to_tsvector('simple', kc.chunk_text), to_tsquery('simple', %s)) AS score,
+            ts_rank_cd(to_tsvector('simple', kc.chunk_text), to_tsquery('simple', %s)) AS rank,
             sa.title,
             sa.published_at,
             sa.verdict_label
         FROM knowledge_chunks kc
         JOIN source_articles sa ON sa.url = kc.article_url
         WHERE to_tsvector('simple', kc.chunk_text) @@ to_tsquery('simple', %s)
-        ORDER BY score DESC
+        ORDER BY rank DESC
         LIMIT %s
     """
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (tsquery, tsquery, top_k * 5))
+            cur.execute(sql, (tsquery, tsquery, top_k * 10))
             rows = cur.fetchall()
 
     if not rows:
         return []
 
-    # Normalize scores to 0-1 range
-    max_score = max(row[4] for row in rows) or 1.0
-
     deduped_results = {}
     for row in rows:
-        normalized_score = row[4] / max_score if max_score > 0 else 0
-        if normalized_score >= similarity_threshold:
+        chunk_text_lower = (row[2] or "").lower()
+        title_lower = (row[5] or "").lower()
+        combined = chunk_text_lower + " " + title_lower
+
+        # Count how many query words appear in the chunk
+        matched_words = sum(1 for w in words if w in combined)
+        word_overlap = matched_words / total_words
+
+        # Require at least 60% of query words to appear, OR all words for short queries
+        if total_words <= 2:
+            min_overlap = 1.0
+        elif total_words <= 4:
+            min_overlap = 0.75
+        else:
+            min_overlap = 0.6
+
+        if word_overlap < min_overlap:
+            continue
+
+        # Score = word overlap (0..1) — clean & meaningful
+        if word_overlap >= similarity_threshold:
             candidate = {
                 "chunk_id": row[0],
                 "url": row[1],
                 "snippet": row[2],
                 "source": row[3],
-                "similarity_score": round(normalized_score, 4),
+                "similarity_score": round(word_overlap, 4),
                 "title": row[5],
                 "published_at": row[6].isoformat() if row[6] else None,
                 "source_verdict": row[7],
