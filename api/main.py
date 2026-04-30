@@ -253,9 +253,11 @@ def extract_claims(req: ExtractRequest):
 
 
 @app.get("/ztb_results")
-def get_ztb_results(limit: int = 30, date: str | None = None):
-    """Return latest ZTB articles that have SUPPORTED/REFUTED verification results.
-    Optional date filter (YYYY-MM-DD) to show articles from a specific date.
+def get_ztb_results(limit: int = 30, date: str | None = None, verdict: str | None = None):
+    """Return latest ZTB articles that have verification results.
+    Optional filters:
+      - date (YYYY-MM-DD): filter by published date
+      - verdict (SUPPORTED | REFUTED | NOT_ENOUGH_INFO): filter by verdict
     """
     def _to_payload(raw_response: dict | str | None) -> dict:
         if isinstance(raw_response, dict):
@@ -338,6 +340,11 @@ def get_ztb_results(limit: int = 30, date: str | None = None):
         except ValueError:
             pass
 
+    # Build verdict filter
+    valid_verdicts = {"SUPPORTED", "REFUTED", "NOT_ENOUGH_INFO"}
+    verdicts_to_show = {verdict.upper()} if (verdict and verdict.upper() in valid_verdicts) else {"SUPPORTED", "REFUTED"}
+    verdicts_list = list(verdicts_to_show)
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -367,6 +374,7 @@ def get_ztb_results(limit: int = 30, date: str | None = None):
                           FROM ztb_claims zc
                           JOIN verifications v ON v.claim_id = zc.claim_id
                           WHERE zc.article_url = sa.url
+                            AND v.verdict = ANY(%s)
                       )
                     ORDER BY COALESCE(sa.published_at, sa.created_at) DESC NULLS LAST
                     LIMIT %s
@@ -388,9 +396,10 @@ def get_ztb_results(limit: int = 30, date: str | None = None):
                 JOIN ztb_claims zc ON zc.article_url = fa.url
                 JOIN verifications v ON v.claim_id = zc.claim_id
                 LEFT JOIN source_articles ref_sa ON ref_sa.url = v.best_article_url
+                WHERE v.verdict = ANY(%s)
                 ORDER BY COALESCE(fa.published_at, fa.created_at) DESC NULLS LAST, zc.claim_id
                 """,
-                (date_filter, limit),
+                (date_filter, verdicts_list, limit, verdicts_list),
             )
         else:
             cur.execute(
@@ -404,7 +413,7 @@ def get_ztb_results(limit: int = 30, date: str | None = None):
                           FROM ztb_claims zc
                           JOIN verifications v ON v.claim_id = zc.claim_id
                           WHERE zc.article_url = sa.url
-                            AND v.verdict IN ('SUPPORTED', 'REFUTED')
+                            AND v.verdict = ANY(%s)
                       )
                     ORDER BY COALESCE(sa.published_at, sa.created_at) DESC NULLS LAST
                     LIMIT %s
@@ -426,10 +435,10 @@ def get_ztb_results(limit: int = 30, date: str | None = None):
                 JOIN ztb_claims zc ON zc.article_url = lva.url
                 JOIN verifications v ON v.claim_id = zc.claim_id
                 LEFT JOIN source_articles ref_sa ON ref_sa.url = v.best_article_url
-                WHERE v.verdict IN ('SUPPORTED', 'REFUTED')
+                WHERE v.verdict = ANY(%s)
                 ORDER BY COALESCE(lva.published_at, lva.created_at) DESC NULLS LAST, zc.claim_id
             """,
-            (limit,),
+            (verdicts_list, limit, verdicts_list),
         )
         rows = cur.fetchall()
         cur.close()

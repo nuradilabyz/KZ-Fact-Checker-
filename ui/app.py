@@ -415,9 +415,23 @@ def _article_border_style(verdicts: list[str]) -> tuple[str, str, str]:
 with tab_ztb:
     st.markdown("### 📰 ZTB.kz мақалаларының тексеру нәтижелері")
 
+    verdict_filter = st.radio(
+        "Вердикт:",
+        ["✅+❌ Расталды/Жалған", "✅ Тек Расталды", "❌ Тек Жалған", "⚠️ Ақпарат жеткіліксіз"],
+        horizontal=True,
+        key="ztb_verdict_filter",
+    )
+    verdict_param_map = {
+        "✅+❌ Расталды/Жалған": None,
+        "✅ Тек Расталды": "SUPPORTED",
+        "❌ Тек Жалған": "REFUTED",
+        "⚠️ Ақпарат жеткіліксіз": "NOT_ENOUGH_INFO",
+    }
+    selected_verdict = verdict_param_map[verdict_filter]
+
     col_filter, col_date, col_btn = st.columns([2, 3, 1])
     with col_filter:
-        filter_mode = st.radio("Көрсету:", ["Барлығы", "Күн бойынша"], horizontal=True, key="ztb_filter_mode")
+        filter_mode = st.radio("Күн фильтрі:", ["Барлығы", "Күн бойынша"], horizontal=True, key="ztb_filter_mode")
     with col_date:
         selected_date = st.date_input(
             "Күнді таңдаңыз:",
@@ -434,12 +448,14 @@ with tab_ztb:
 
     try:
         with st.spinner("Деректер жүктелуде..."):
+            params = ["limit=50"]
+            date_str = ""
             if filter_mode == "Күн бойынша":
                 date_str = selected_date.strftime("%Y-%m-%d")
-                api_params = f"limit=50&date={date_str}"
-            else:
-                api_params = "limit=50"
-                date_str = ""
+                params.append(f"date={date_str}")
+            if selected_verdict:
+                params.append(f"verdict={selected_verdict}")
+            api_params = "&".join(params)
             resp = requests.get(f"{API_URL}/ztb_results?{api_params}", timeout=180)
             if resp.status_code == 200:
                 payload = resp.json()
