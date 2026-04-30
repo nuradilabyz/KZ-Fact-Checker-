@@ -56,6 +56,7 @@ def text_search(
     query: str,
     similarity_threshold: float = 0.05,
     top_k: int = 5,
+    min_meaningful_words: int = 2,
 ) -> list[dict]:
     """
     PostgreSQL full-text search on knowledge_chunks.
@@ -82,7 +83,7 @@ def text_search(
     }
     all_words = [w.lower() for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 2]
     meaningful = [w for w in all_words if w not in STOP_WORDS]
-    if len(meaningful) < 2:
+    if len(meaningful) < min_meaningful_words:
         return []
     words = meaningful
 
@@ -124,9 +125,11 @@ def text_search(
         matched_words = sum(1 for w in meaningful if w in combined)
         word_overlap = matched_words / total_words
 
-        # Stricter overlap: meaningful words only
-        if total_words <= 3:
-            min_overlap = 1.0
+        # Overlap thresholds (looser for single-word search)
+        if total_words == 1:
+            min_overlap = 1.0  # single word must be in chunk
+        elif total_words <= 3:
+            min_overlap = 0.85 if min_meaningful_words >= 2 else 0.66
         elif total_words <= 5:
             min_overlap = 0.85
         else:

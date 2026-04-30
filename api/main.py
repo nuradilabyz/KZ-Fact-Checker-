@@ -620,7 +620,12 @@ def search_articles(q: str, top_k: int = 10):
     """Simple full-text search — returns matching articles, no verdict."""
     if not q or len(q.strip()) < 3:
         return {"results": [], "query": q}
-    results = text_search(q.strip(), similarity_threshold=0.5, top_k=top_k)
+    results = text_search(
+        q.strip(),
+        similarity_threshold=0.3,
+        top_k=top_k,
+        min_meaningful_words=1,
+    )
     return {
         "query": q,
         "count": len(results),
