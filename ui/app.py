@@ -440,7 +440,7 @@ with tab_ztb:
             else:
                 api_params = "limit=50"
                 date_str = ""
-            resp = requests.get(f"{API_URL}/ztb_results?{api_params}", timeout=60)
+            resp = requests.get(f"{API_URL}/ztb_results?{api_params}", timeout=180)
             if resp.status_code == 200:
                 payload = resp.json()
                 ztb_articles = payload.get("ztb_results", [])
@@ -630,7 +630,7 @@ with tab_check:
                     resp = requests.post(
                         f"{API_URL}/check",
                         json={"claim": claim_text, "top_k": 5, "similarity_threshold": 0.5},
-                        timeout=60,
+                        timeout=180,
                     )
                     resp.raise_for_status()
                     result = resp.json()
@@ -676,7 +676,7 @@ with tab_check:
                     resp = requests.post(
                         f"{API_URL}/extract_claims",
                         json={"text": post_text},
-                        timeout=60,
+                        timeout=180,
                     )
                     resp.raise_for_status()
                     extract_result = resp.json()
@@ -700,7 +700,7 @@ with tab_check:
                             check_resp = requests.post(
                                 f"{API_URL}/check",
                                 json={"claim": claim_text, "top_k": 5, "similarity_threshold": 0.5},
-                                timeout=60,
+                                timeout=180,
                             )
                             check_resp.raise_for_status()
                             result = check_resp.json()
@@ -750,7 +750,7 @@ with tab_stats:
 
     try:
         with st.spinner("Статистика жүктелуде..."):
-            resp = requests.get(f"{API_URL}/knowledge_stats", timeout=60)
+            resp = requests.get(f"{API_URL}/knowledge_stats", timeout=180)
             if resp.status_code == 200:
                 stats = resp.json()
                 articles = stats.get("articles_per_source", {})
