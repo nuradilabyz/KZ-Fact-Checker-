@@ -613,3 +613,142 @@ def knowledge_stats():
     except Exception as e:
         logger.error(f"Stats error: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+@app.get("/source_health")
+def source_health():
+    """Per-source freshness and ingestion health."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                sa.source,
+                COUNT(*) AS articles,
+                COUNT(DISTINCT DATE(COALESCE(sa.published_at, sa.created_at))) AS distinct_days,
+                MIN(COALESCE(sa.published_at, sa.created_at))::timestamp AS first_seen,
+                MAX(COALESCE(sa.published_at, sa.created_at))::timestamp AS last_seen,
+                EXTRACT(EPOCH FROM (NOW() - MAX(COALESCE(sa.published_at, sa.created_at))))/3600 AS hours_since_last,
+                COALESCE((SELECT COUNT(*) FROM knowledge_chunks kc WHERE kc.source = sa.source), 0) AS chunks
+            FROM source_articles sa
+            GROUP BY sa.source
+            ORDER BY sa.source
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        sources = []
+        for r in rows:
+            hours = float(r[5]) if r[5] is not None else 999.0
+            if hours <= 6:
+                health, badge = "healthy", "🟢"
+            elif hours <= 24:
+                health, badge = "stale", "🟡"
+            else:
+                health, badge = "unhealthy", "🔴"
+            sources.append({
+                "source": r[0],
+                "articles": r[1],
+                "distinct_days": r[2],
+                "first_seen": r[3].isoformat() if r[3] else None,
+                "last_seen": r[4].isoformat() if r[4] else None,
+                "hours_since_last": round(hours, 1),
+                "chunks": r[6],
+                "health": health,
+                "badge": badge,
+            })
+        return {"sources": sources}
+    except Exception as e:
+        logger.error(f"Source health error: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+@app.get("/pipeline_activity")
+def pipeline_activity(days: int = 14):
+    """Daily ingestion activity for the last N days."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DATE(created_at) AS day,
+                   COUNT(*) AS articles,
+                   COUNT(DISTINCT source) AS sources_active
+            FROM source_articles
+            WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
+            GROUP BY day ORDER BY day DESC
+        """, (days,))
+        days_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT DATE(created_at) AS day, source, COUNT(*) AS articles
+            FROM source_articles
+            WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
+            GROUP BY day, source ORDER BY day DESC, source
+        """, (days,))
+        per_source_rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        daily = [{"day": r[0].isoformat(), "articles": r[1], "sources_active": r[2]} for r in days_rows]
+        per_source = {}
+        for r in per_source_rows:
+            d = r[0].isoformat()
+            per_source.setdefault(d, {})[r[1]] = r[2]
+
+        total = sum(d["articles"] for d in daily)
+        avg_per_day = round(total / max(len(daily), 1), 1)
+
+        return {
+            "daily": daily,
+            "per_source_daily": per_source,
+            "total_articles": total,
+            "avg_per_day": avg_per_day,
+            "days_covered": len(daily),
+        }
+    except Exception as e:
+        logger.error(f"Pipeline activity error: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+@app.get("/db_overview")
+def db_overview():
+    """Database tables, sizes, indexes (for monitoring/architecture views)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
+                   pg_total_relation_size(relid) AS size_bytes, n_live_tup
+            FROM pg_stat_user_tables
+            ORDER BY pg_total_relation_size(relid) DESC
+        """)
+        tables = [{"name": r[0], "size": r[1], "size_bytes": r[2], "rows": r[3]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT tablename, indexname, indexdef
+            FROM pg_indexes WHERE schemaname = 'public'
+            ORDER BY tablename, indexname
+        """)
+        indexes = [{"table": r[0], "name": r[1], "def": r[2]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+                (SELECT COUNT(*) FROM source_articles) AS articles,
+                (SELECT COUNT(*) FROM knowledge_chunks) AS chunks,
+                (SELECT COUNT(*) FROM ztb_claims) AS claims,
+                (SELECT COUNT(*) FROM verifications) AS verifications
+        """)
+        counts_row = cur.fetchone()
+        counts = {
+            "articles": counts_row[0],
+            "chunks": counts_row[1],
+            "claims": counts_row[2],
+            "verifications": counts_row[3],
+        }
+        cur.close()
+        conn.close()
+        return {"tables": tables, "indexes": indexes, "counts": counts}
+    except Exception as e:
+        logger.error(f"DB overview error: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")

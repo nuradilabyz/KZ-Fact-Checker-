@@ -183,10 +183,13 @@ st.markdown(
 )
 
 # ── Tabs ─────────────────────────────────────────────────────
-tab_ztb, tab_check, tab_stats, tab_arch = st.tabs([
-    "📰 ZTB тексеру нәтижелері",
-    "🔍 Мәлімдемені тексеру",
-    "📊 Білім қоры",
+tab_pipeline, tab_sources, tab_db, tab_ztb, tab_check, tab_stats, tab_arch = st.tabs([
+    "🔧 Pipeline",
+    "📡 Дерек көздері",
+    "🗄 Дерекқор",
+    "📰 ZTB нәтижелері",
+    "🔍 Тексеру",
+    "📊 Статистика",
     "🏗 Архитектура",
 ])
 
@@ -409,6 +412,182 @@ def _article_border_style(verdicts: list[str]) -> tuple[str, str, str]:
         return "#10b981", "rgba(16, 185, 129, 0.06)", "✅"
     else:
         return "#f59e0b", "rgba(245, 158, 11, 0.06)", "⚠️"
+
+
+# ── TAB: Pipeline Monitoring ─────────────────────────────────
+with tab_pipeline:
+    st.markdown("### 🔧 Data Pipeline Monitoring")
+    st.markdown("*Hourly ingestion via Apache Airflow / GitHub Actions cron*")
+
+    if st.button("🔄 Жаңарту", key="refresh_pipe"):
+        st.rerun()
+
+    try:
+        with st.spinner("Жүктелуде..."):
+            r = requests.get(f"{API_URL}/pipeline_activity?days=14", timeout=180).json()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{r.get("total_articles", 0)}</div><div class="stat-label">Соңғы 14 күн (мақалалар)</div></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{r.get("avg_per_day", 0)}</div><div class="stat-label">Күніне орташа</div></div>', unsafe_allow_html=True)
+        with col3:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{r.get("days_covered", 0)}</div><div class="stat-label">Күн қамтылды</div></div>', unsafe_allow_html=True)
+        with col4:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">24/7</div><div class="stat-label">Cron расписание</div></div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+        st.markdown("#### 📈 Күнделікті ingestion (соңғы 14 күн)")
+
+        daily = r.get("daily", [])
+        if daily:
+            try:
+                import pandas as pd
+                df = pd.DataFrame(daily)
+                df["day"] = pd.to_datetime(df["day"])
+                df = df.set_index("day").sort_index()
+                st.bar_chart(df["articles"], height=250)
+            except Exception:
+                for d in daily[:14]:
+                    st.markdown(f"**{d['day']}** — {d['articles']} мақала ({d['sources_active']} дерек көзі)")
+
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+        st.markdown("#### 🛠 Pipeline Stack")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("""
+**Orchestration**
+- Apache Airflow DAG (local dev)
+- GitHub Actions cron (production, hourly)
+
+**Ingestion (Python)**
+- BeautifulSoup + lxml (HTML parsing)
+- Multi-source RSS / category scraping
+- Rate limiting + content hashing (MD5)
+""")
+        with c2:
+            st.markdown("""
+**Storage**
+- PostgreSQL 17 + pgvector (Neon)
+- HNSW vector index + GIN FTS index
+
+**Deployment**
+- Render (API + UI, free tier)
+- Neon (managed PostgreSQL)
+- Zero-cost infrastructure
+""")
+    except Exception as e:
+        st.error(f"Қате: {e}")
+
+
+# ── TAB: Data Sources ────────────────────────────────────────
+with tab_sources:
+    st.markdown("### 📡 Дерек көздерінің жағдайы")
+    st.markdown("*Источник за источником — свежесть, объём, статус*")
+
+    if st.button("🔄 Жаңарту", key="refresh_src"):
+        st.rerun()
+
+    try:
+        with st.spinner("Жүктелуде..."):
+            r = requests.get(f"{API_URL}/source_health", timeout=180).json()
+
+        sources = r.get("sources", [])
+        emoji_map = {"factcheck": "🛡", "azattyq": "📻", "informburo": "📰", "tengrinews": "🌐", "ztb": "📋"}
+
+        for src in sources:
+            name = src["source"]
+            emoji = emoji_map.get(name, "📄")
+            badge = src.get("badge", "⚪")
+            health = src.get("health", "unknown")
+            health_color = {"healthy": "#10b981", "stale": "#f59e0b", "unhealthy": "#ef4444"}.get(health, "#94a3b8")
+
+            hours = src.get("hours_since_last", 0)
+            if hours < 1:
+                fresh = f"{int(hours*60)} мин бұрын"
+            elif hours < 24:
+                fresh = f"{int(hours)} сағ бұрын"
+            else:
+                fresh = f"{int(hours/24)} күн бұрын"
+
+            st.markdown(f"""
+<div style="background:rgba(30,41,59,0.5);border-left:5px solid {health_color};border-radius:12px;padding:1.2rem;margin-bottom:0.8rem;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+<div style="font-size:1.2rem;font-weight:700;">{emoji} {name}.kz</div>
+<div style="color:{health_color};font-weight:600;">{badge} {health.upper()}</div>
+</div>
+<div style="display:flex;gap:2rem;color:#cbd5e1;font-size:0.9rem;">
+<div>📊 <strong>{src.get('articles', 0)}</strong> мақала</div>
+<div>🧩 <strong>{src.get('chunks', 0)}</strong> chunk</div>
+<div>📅 <strong>{src.get('distinct_days', 0)}</strong> күн</div>
+<div>⏱ Соңғы: <strong>{fresh}</strong></div>
+</div>
+</div>""", unsafe_allow_html=True)
+
+        st.markdown("""
+<div style="margin-top:1rem;padding:1rem;background:rgba(99,102,241,0.06);border-radius:10px;">
+<small style="color:#94a3b8;">
+🟢 Healthy = ≤6 сағат бұрын жаңа мақала · 🟡 Stale = 6-24 сағат · 🔴 Unhealthy = >24 сағат
+</small>
+</div>""", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Қате: {e}")
+
+
+# ── TAB: Database Overview ───────────────────────────────────
+with tab_db:
+    st.markdown("### 🗄 Дерекқор шолуы")
+    st.markdown("*PostgreSQL + pgvector + Full-Text Search*")
+
+    if st.button("🔄 Жаңарту", key="refresh_db"):
+        st.rerun()
+
+    try:
+        with st.spinner("Жүктелуде..."):
+            r = requests.get(f"{API_URL}/db_overview", timeout=180).json()
+
+        counts = r.get("counts", {})
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{counts.get("articles", 0):,}</div><div class="stat-label">📰 Мақалалар</div></div>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{counts.get("chunks", 0):,}</div><div class="stat-label">🧩 Chunks</div></div>', unsafe_allow_html=True)
+        with c3:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{counts.get("claims", 0):,}</div><div class="stat-label">💬 Claims</div></div>', unsafe_allow_html=True)
+        with c4:
+            st.markdown(f'<div class="stat-card"><div class="stat-number">{counts.get("verifications", 0):,}</div><div class="stat-label">⚖️ Verifications</div></div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+        st.markdown("#### 📊 Кестелер")
+
+        tables = r.get("tables", [])
+        if tables:
+            try:
+                import pandas as pd
+                df = pd.DataFrame([{"Кесте": t["name"], "Көлемі": t["size"], "Жолдар": f'{t["rows"]:,}'} for t in tables])
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            except Exception:
+                for t in tables:
+                    st.markdown(f"- **{t['name']}** — {t['size']} ({t['rows']:,} жол)")
+
+        st.markdown("#### 🔍 Индекстер")
+        indexes = r.get("indexes", [])
+        if indexes:
+            for tbl in sorted(set(i["table"] for i in indexes)):
+                st.markdown(f"**{tbl}**")
+                for idx in [i for i in indexes if i["table"] == tbl]:
+                    idx_type = "PRIMARY" if "_pkey" in idx["name"] else ("UNIQUE" if "UNIQUE" in idx["def"] else ("HNSW" if "hnsw" in idx["def"].lower() else ("GIN" if "gin" in idx["def"].lower() else "BTREE")))
+                    type_color = {"HNSW": "#10b981", "GIN": "#818cf8", "PRIMARY": "#f59e0b", "UNIQUE": "#94a3b8", "BTREE": "#cbd5e1"}.get(idx_type, "#cbd5e1")
+                    st.markdown(f'<div style="margin-left:1rem;padding:0.4rem 0.8rem;background:rgba(30,41,59,0.4);border-left:3px solid {type_color};border-radius:6px;margin-bottom:0.3rem;font-size:0.85rem;"><strong style="color:{type_color};">{idx_type}</strong> · {idx["name"]}</div>', unsafe_allow_html=True)
+
+        st.markdown("""
+<div style="margin-top:1.5rem;padding:1rem;background:rgba(99,102,241,0.06);border-radius:10px;">
+<strong>HNSW</strong> — pgvector approximate nearest neighbor index for vector similarity search<br>
+<strong>GIN</strong> — Generalized Inverted Index for fast Full-Text Search (ts_rank queries)<br>
+<strong>BTREE</strong> — standard balanced-tree index for filters and sorts
+</div>""", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Қате: {e}")
 
 
 # ── TAB 1: ZTB Verification Results ─────────────────────────
