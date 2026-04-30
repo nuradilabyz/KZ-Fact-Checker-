@@ -183,10 +183,11 @@ st.markdown(
 )
 
 # ── Tabs ─────────────────────────────────────────────────────
-tab_pipeline, tab_sources, tab_db, tab_ztb, tab_check, tab_stats, tab_arch = st.tabs([
+tab_pipeline, tab_sources, tab_db, tab_search, tab_ztb, tab_check, tab_stats, tab_arch = st.tabs([
     "🔧 Pipeline",
     "📡 Дерек көздері",
     "🗄 Дерекқор",
+    "🔎 Іздеу",
     "📰 ZTB нәтижелері",
     "🔍 Тексеру",
     "📊 Статистика",
@@ -588,6 +589,59 @@ with tab_db:
 </div>""", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Қате: {e}")
+
+
+# ── TAB: Live Search ─────────────────────────────────────────
+with tab_search:
+    st.markdown("### 🔎 Білім қорынан іздеу")
+    st.markdown("*PostgreSQL Full-Text Search · 7500+ chunks across 4 sources*")
+
+    query = st.text_input(
+        "Іздеу сұранысы:",
+        placeholder="Мысалы: бюджет Алматы 2026, инфляция, Токаев",
+        key="search_q",
+    )
+
+    if query and len(query.strip()) >= 3:
+        try:
+            with st.spinner("Іздеу..."):
+                r = requests.get(f"{API_URL}/search", params={"q": query, "top_k": 15}, timeout=60).json()
+
+            results = r.get("results", [])
+            count = len(results)
+
+            if count == 0:
+                st.info("Сұраныс бойынша мақалалар табылмады. Басқа сөздерді көріп көріңіз.")
+            else:
+                st.markdown(f"**{count} мақала табылды**")
+                for i, res in enumerate(results, 1):
+                    src = res.get("source", "?")
+                    emoji = {"factcheck": "🛡", "azattyq": "📻", "informburo": "📰", "tengrinews": "🌐", "ztb": "📋"}.get(src, "📄")
+                    title = escape(res.get("title", "Untitled"))
+                    url = escape(res.get("url", ""))
+                    snippet = escape((res.get("snippet") or "")[:300])
+                    similarity = int((res.get("similarity_score") or 0) * 100)
+                    pub = (res.get("published_at") or "")[:10]
+                    pub_html = f' · <span style="color:#64748b;font-size:0.78rem;">{pub}</span>' if pub else ""
+
+                    st.markdown(f"""
+<div style="background:rgba(30,41,59,0.5);border-left:3px solid #818cf8;border-radius:8px;padding:0.9rem 1.1rem;margin-bottom:0.6rem;">
+<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:0.4rem;">
+<div style="font-weight:600;color:#e2e8f0;">{emoji} {title[:130]}{pub_html}</div>
+<div style="background:rgba(99,102,241,0.15);color:#818cf8;padding:2px 8px;border-radius:8px;font-size:0.75rem;font-weight:600;white-space:nowrap;">{similarity}%</div>
+</div>
+<div style="color:#cbd5e1;font-size:0.85rem;line-height:1.5;margin-bottom:0.4rem;">{snippet}…</div>
+<a href="{url}" target="_blank" style="color:#93c5fd;font-size:0.78rem;text-decoration:none;">🔗 Толық оқу →</a>
+</div>""", unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Қате: {e}")
+    else:
+        st.markdown("""
+<div style="margin-top:1rem;padding:1.5rem;background:rgba(99,102,241,0.06);border-radius:10px;text-align:center;color:#94a3b8;">
+🔎 <strong>Іздеу мысалдары:</strong> бюджет, инфляция, Токаев, Алматы суы, ЕАЭО
+<br><br>
+<small>Бұл — PostgreSQL Full-Text Search (GIN index) арқылы орындалатын жылдам іздеу.</small>
+</div>""", unsafe_allow_html=True)
 
 
 # ── TAB 1: ZTB Verification Results ─────────────────────────
