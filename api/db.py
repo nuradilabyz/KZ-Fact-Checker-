@@ -52,20 +52,16 @@ def get_db_connection():
     return psycopg2.connect(**_db_kwargs())
 
 
-def vector_search(
-    query_embedding: list[float],
-    fetch_limit: int = 30,
-    similarity_threshold: float = 0.50,
+def text_search(
+    query: str,
+    similarity_threshold: float = 0.05,
     top_k: int = 5,
 ) -> list[dict]:
     """
-    Two-stage retrieval from knowledge_chunks:
-    1. Fetch nearest neighbors via pgvector HNSW index
-    2. Filter by similarity_threshold
-    3. Return top_k with article metadata
+    PostgreSQL full-text search on knowledge_chunks.
+    Uses ts_rank for relevance scoring (no embeddings needed).
     """
     def _normalized_article_key(url: str, source: str, title: str) -> str:
-        """Collapse duplicate rows for the same article across chunks or trailing-slash URL variants."""
         if url:
             parts = urlsplit(url)
             norm_path = parts.path.rstrip("/") or "/"
@@ -73,40 +69,52 @@ def vector_search(
             return norm_url
         return f"{(source or '').strip().lower()}::{(title or '').strip().lower()}"
 
-    embedding_str = str(query_embedding)
-    effective_fetch_limit = max(fetch_limit, top_k * 10)
+    # Build tsquery: replace whitespace with | (OR) for fuzzy matching
+    # Strip non-word chars, keep words >2 chars
+    import re
+    words = [w for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 2]
+    if not words:
+        return []
+    tsquery = " | ".join(words)
 
-    query = """
+    sql = """
         SELECT
             kc.chunk_id,
             kc.article_url,
             kc.chunk_text,
             kc.source,
-            1 - (kc.embedding <=> %s::vector) AS similarity_score,
+            ts_rank_cd(to_tsvector('simple', kc.chunk_text), to_tsquery('simple', %s)) AS score,
             sa.title,
             sa.published_at,
             sa.verdict_label
         FROM knowledge_chunks kc
         JOIN source_articles sa ON sa.url = kc.article_url
-        ORDER BY kc.embedding <=> %s::vector
+        WHERE to_tsvector('simple', kc.chunk_text) @@ to_tsquery('simple', %s)
+        ORDER BY score DESC
         LIMIT %s
     """
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, (embedding_str, embedding_str, effective_fetch_limit))
+            cur.execute(sql, (tsquery, tsquery, top_k * 5))
             rows = cur.fetchall()
+
+    if not rows:
+        return []
+
+    # Normalize scores to 0-1 range
+    max_score = max(row[4] for row in rows) or 1.0
 
     deduped_results = {}
     for row in rows:
-        score = row[4]
-        if score >= similarity_threshold:
+        normalized_score = row[4] / max_score if max_score > 0 else 0
+        if normalized_score >= similarity_threshold:
             candidate = {
                 "chunk_id": row[0],
                 "url": row[1],
                 "snippet": row[2],
                 "source": row[3],
-                "similarity_score": round(score, 4),
+                "similarity_score": round(normalized_score, 4),
                 "title": row[5],
                 "published_at": row[6].isoformat() if row[6] else None,
                 "source_verdict": row[7],
@@ -122,3 +130,5 @@ def vector_search(
         reverse=True,
     )
     return results[:top_k]
+
+

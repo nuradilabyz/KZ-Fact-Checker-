@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from api.db import get_db_connection, vector_search
+from api.db import get_db_connection, text_search
 from api.prompt import SYSTEM_PROMPT
 
 load_dotenv()
@@ -60,21 +60,6 @@ def _ollama_chat(messages: list[dict], temperature: float = 0.0) -> str | None:
         return None
 
 
-# ── Embedding model (local, free) ───────────────────────────
-from sentence_transformers import SentenceTransformer
-
-_embed_model = None
-
-
-def get_embed_model() -> SentenceTransformer:
-    global _embed_model
-    if _embed_model is None:
-        model_name = os.getenv(
-            "EMBEDDING_MODEL_NAME",
-            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        )
-        _embed_model = SentenceTransformer(model_name)
-    return _embed_model
 
 
 def _normalize_match_text(text: str) -> str:
@@ -160,25 +145,27 @@ def health():
 
 
 def _algorithmic_verdict(claim: str, evidence_blocks: list[dict]) -> dict:
-    """Determine verdict using similarity scores + factcheck labels (no LLM needed)."""
+    """Determine verdict using FTS relevance + factcheck labels (no LLM needed)."""
     best = evidence_blocks[0] if evidence_blocks else {}
-    top_sim = best.get("similarity_score", 0.0)
+    top_score = best.get("similarity_score", 0.0)
 
-    # Check factcheck.kz verdict labels first
+    # Check factcheck.kz verdict labels first (REFUTED/SUPPORTED based on label)
     heuristic = _factcheck_label_heuristic(claim, evidence_blocks)
     if heuristic:
         return heuristic
 
-    # Algorithmic verdict based on similarity
-    if top_sim >= 0.80:
-        verdict, confidence = "SUPPORTED", round(top_sim, 2)
-        explanation = f"Бұл мәлімдеме деректер қорындағы мақаламен {int(top_sim*100)}% ұқсас. Жоғары ұқсастық негізінде расталды."
-    elif top_sim >= 0.60:
-        verdict, confidence = "SUPPORTED", round(top_sim * 0.8, 2)
-        explanation = f"Бұл мәлімдеме деректер қорындағы мақаламен {int(top_sim*100)}% ұқсас. Орташа сенімділікпен расталды."
-    elif top_sim >= 0.45:
-        verdict, confidence = "NOT_ENOUGH_INFO", round(top_sim * 0.5, 2)
-        explanation = f"Деректер қорынан ұқсас ақпарат табылды ({int(top_sim*100)}%), бірақ нақты тексеру үшін жеткіліксіз."
+    # Count how many evidence blocks have high relevance
+    strong_matches = sum(1 for ev in evidence_blocks if ev.get("similarity_score", 0) >= 0.5)
+
+    if top_score >= 0.7 and strong_matches >= 2:
+        verdict, confidence = "SUPPORTED", round(top_score, 2)
+        explanation = f"Деректер қорынан {strong_matches} ұқсас мақала табылды (ең жоғары релеванттық: {int(top_score*100)}%). Жоғары сенімділікпен расталды."
+    elif top_score >= 0.4:
+        verdict, confidence = "SUPPORTED", round(top_score * 0.8, 2)
+        explanation = f"Деректер қорынан ұқсас ақпарат табылды (релеванттық: {int(top_score*100)}%). Орташа сенімділікпен расталды."
+    elif top_score >= 0.15:
+        verdict, confidence = "NOT_ENOUGH_INFO", round(top_score * 0.5, 2)
+        explanation = f"Деректер қорынан ішінара ұқсас ақпарат табылды ({int(top_score*100)}%), бірақ нақты тексеру үшін жеткіліксіз."
     else:
         verdict, confidence = "NOT_ENOUGH_INFO", 0.0
         explanation = "Деректер қорынан бұл мәлімдемеге қатысты жеткілікті ақпарат табылмады."
@@ -190,22 +177,13 @@ def _algorithmic_verdict(claim: str, evidence_blocks: list[dict]) -> dict:
 def check_claim(req: CheckRequest):
     """
     Verify a claim:
-    1. Embed claim → vector (local model)
-    2. pgvector search → top evidence
-    3. Algorithmic verdict (similarity + factcheck labels)
+    1. PostgreSQL full-text search (no model needed, instant)
+    2. Algorithmic verdict (relevance score + factcheck labels)
     """
-    # 1. Embed (local model)
-    try:
-        model = get_embed_model()
-        query_embedding = model.encode(req.claim, normalize_embeddings=True).tolist()
-    except Exception as e:
-        logger.error(f"Embedding failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Embedding error: {e}")
-
-    # 2. Vector search
-    evidence_blocks = vector_search(
-        query_embedding,
-        similarity_threshold=req.similarity_threshold,
+    # 1. Full-text search
+    evidence_blocks = text_search(
+        req.claim,
+        similarity_threshold=0.05,
         top_k=req.top_k,
     )
 
